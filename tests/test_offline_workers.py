@@ -129,6 +129,7 @@ def test_worker_scopes_model_inventions_and_checks_gpu_twice(tmp_path, monkeypat
     import graphify.offline_workers as workers
 
     calls = []
+    monkeypatch.setitem(llm.BACKENDS["ollama"], "base_url", "http://127.0.0.1:1/v1")
     monkeypatch.setattr(dual_gpu, "_check_targets", lambda targets: calls.append(targets[0]))
     monkeypatch.setattr(workers, "_check_weights", lambda *args: None)
     monkeypatch.setattr(
@@ -152,6 +153,7 @@ def test_worker_scopes_model_inventions_and_checks_gpu_twice(tmp_path, monkeypat
     )
     assert len(calls) == 2
     assert calls[0].model == manifest["models"][0]
+    assert llm.BACKENDS["ollama"]["base_url"] == "http://127.0.0.1:11436/v1"
     fragment_path, _ = _artifact_paths(tmp_path / "worker", manifest["run_id"], "a.md")
     fragment = json.loads(fragment_path.read_text(encoding="utf-8"))
     assert [node["id"] for node in fragment["nodes"]] == ["real"]

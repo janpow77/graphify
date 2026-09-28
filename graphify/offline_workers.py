@@ -225,7 +225,12 @@ def run_shard(
 ) -> int:
     """Extract one shard while checking model and source identities."""
     from graphify.dual_gpu import Target, _check_targets
-    from graphify.llm import _extraction_system, _partial_source_files, extract_corpus_parallel
+    from graphify.llm import (
+        BACKENDS,
+        _extraction_system,
+        _partial_source_files,
+        extract_corpus_parallel,
+    )
     from graphify.cache import scope_semantic_result
 
     manifest = _read_manifest(manifest_path)
@@ -244,6 +249,10 @@ def run_shard(
     os.environ["GRAPHIFY_OLLAMA_REASONING_EFFORT"] = "none"
     os.environ["GRAPHIFY_OLLAMA_NUM_CTX"] = "16384"
     os.environ["GRAPHIFY_MAX_OUTPUT_TOKENS"] = "4096"
+    # BACKENDS is initialized when graphify.llm is imported above. The worker
+    # selects its endpoint afterwards, so refresh the cached provider settings.
+    BACKENDS["ollama"]["base_url"] = endpoint.rstrip("/")
+    BACKENDS["ollama"]["default_model"] = model
     root = root.resolve()
     complete = 0
     for entry in manifest["files"]:
