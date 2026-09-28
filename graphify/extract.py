@@ -68,6 +68,7 @@ from graphify.extractors.sql import extract_sql  # noqa: F401
 from graphify.extractors.terraform import extract_terraform, prepare_terraform, resolve_terraform_modules  # noqa: F401
 from graphify.extractors.verilog import extract_verilog  # noqa: F401
 from graphify.extractors.vbnet import extract_vbnet, resolve_vbnet_partial_calls  # noqa: F401
+from graphify.extractors.vba import extract_vba  # noqa: F401
 from graphify.extractors.zig import extract_zig  # noqa: F401
 from graphify.security import sanitize_metadata
 from graphify.paths import disambiguate_ambiguous_candidates
@@ -6633,6 +6634,7 @@ _DISPATCH: dict[str, Any] = {
     ".cobol": extract_cobol,
     ".cpy": extract_cobol,
     ".vb": extract_vbnet,
+    ".bas": extract_vba,
     ".kt": extract_kotlin,
     ".kts": extract_kotlin,
     ".scala": extract_scala,
@@ -6722,6 +6724,7 @@ _DISPATCH: dict[str, Any] = {
 # extract() to tell the user which extra restores the language.
 _EXTRA_FOR_EXTENSION = {
     ".vb": "vbnet",
+    ".bas": "vba",
     ".r": "r",
     ".sol": "solidity",
     ".erl": "erlang",
