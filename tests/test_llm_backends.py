@@ -588,6 +588,39 @@ def test_call_openai_compat_labels_unparseable_json_hollow(monkeypatch):
     assert result["finish_reason"] == "hollow"
 
 
+def test_ollama_rejects_json_with_missing_source_file(monkeypatch):
+    fake_resp = _fake_openai_response(
+        '{"nodes":[{"id":"service","label":"Service","file_type":"concept"}],'
+        '"edges":[],"hyperedges":[]}',
+        finish_reason="stop", completion_tokens=100,
+    )
+    _install_fake_openai(monkeypatch, fake_resp)
+
+    result = llm._call_openai_compat(
+        "http://localhost:11434/v1", "ollama", "qwen3.5:9b",
+        "user msg", temperature=0, max_completion_tokens=8192, backend="ollama",
+    )
+    assert result["finish_reason"] == "hollow"
+    assert result["nodes"] == []
+
+
+def test_ollama_accepts_edge_without_recoverable_source_file(monkeypatch):
+    fake_resp = _fake_openai_response(
+        '{"nodes":[{"id":"a","label":"A","file_type":"concept","source_file":"doc.md"}],'
+        '"edges":[{"source":"a","target":"b","relation":"references",'
+        '"confidence":"EXTRACTED"}],"hyperedges":[]}',
+        finish_reason="stop", completion_tokens=100,
+    )
+    _install_fake_openai(monkeypatch, fake_resp)
+
+    result = llm._call_openai_compat(
+        "http://localhost:11434/v1", "ollama", "qwen3.5:9b",
+        "user msg", temperature=0, max_completion_tokens=8192, backend="ollama",
+    )
+    assert result["finish_reason"] == "stop"
+    assert len(result["edges"]) == 1
+
+
 def test_call_openai_compat_keeps_real_truncation_as_length(monkeypatch):
     # A genuine truncation stays "length" — that one IS a size problem and the
     # bisection path is the right recovery.
@@ -666,6 +699,12 @@ def test_ollama_extra_body_sets_num_ctx_and_keep_alive(monkeypatch):
     assert "num_ctx" in eb.get("options", {}), "num_ctx must be present"
     assert eb["options"]["num_ctx"] >= 8192, "num_ctx must be at least the floor value"
     assert eb.get("keep_alive") == "30m", "default keep_alive must be 30m"
+    schema = captured["response_format"]
+    assert schema["type"] == "json_schema"
+    fragment = schema["json_schema"]["schema"]
+    assert set(fragment["required"]) == {"nodes", "edges", "hyperedges"}
+    assert "source_file" in fragment["properties"]["edges"]["items"]["required"]
+    assert "confidence" in fragment["properties"]["edges"]["items"]["required"]
 
 
 def test_ollama_num_ctx_scales_with_small_token_budget(monkeypatch):

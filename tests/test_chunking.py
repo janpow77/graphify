@@ -105,6 +105,35 @@ def test_pack_chunks_rejects_non_positive_budget(tmp_path):
         _pack_chunks_by_tokens([f], token_budget=0)
 
 
+def test_document_budget_preserves_full_source_across_slices(tmp_path, no_tokenizer):
+    """A single Markdown file must not bypass a small semantic token budget."""
+    from graphify.file_slice import FileSlice, read_slice_text
+    from graphify.llm import _read_files, extract_corpus_parallel
+
+    source = ("# Einleitung\n" + "Ein Absatz über die Plattform.\n\n") * 80
+    document = tmp_path / "architecture.md"
+    document.write_text(source, encoding="utf-8")
+    seen = []
+
+    def record(chunk, **kwargs):
+        seen.extend(chunk)
+        return _stub_chunk_result(len(chunk), len(seen))
+
+    with patch("graphify.llm.extract_files_direct", side_effect=record):
+        extract_corpus_parallel(
+            [document], backend="ollama", token_budget=300,
+            max_concurrency=1, root=tmp_path, cache_root=tmp_path / "output",
+        )
+
+    assert len(seen) > 1
+    assert all(isinstance(unit, FileSlice) and unit.path == document for unit in seen)
+    assert "".join(read_slice_text(unit) for unit in seen) == source
+    assert all(unit.end - unit.start <= 300 * 4 - 160 for unit in seen)
+    for unit in seen:
+        start_line = source.count("\n", 0, unit.start) + 1
+        assert f'path="architecture.md" lines="{start_line}-' in _read_files([unit], tmp_path)
+
+
 # ---- Tokenizer fallback ------------------------------------------------------
 
 def test_estimate_file_tokens_uses_tiktoken_when_available(tmp_path):

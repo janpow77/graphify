@@ -23,6 +23,7 @@ from graphify.file_slice import (
     expand_oversized_files,
     read_slice_text,
     unit_path,
+    unit_source_text,
 )
 
 # `_read_files` truncates each file at this many characters before joining into
@@ -515,6 +516,55 @@ dependencies visible in the sources). Avoid broad conceptual similarity edges.
 Mark uncertain ones AMBIGUOUS instead of omitting.
 """
 
+# Ollama's OpenAI-compatible endpoint supports constrained JSON output. Keep
+# the shape small: the prompt carries the richer field guidance, while these
+# required fields prevent a syntactically valid but unusable graph fragment.
+_OLLAMA_EXTRACTION_RESPONSE_FORMAT = {
+    "type": "json_schema",
+    "json_schema": {
+        "name": "graphify_fragment",
+        "schema": {
+            "type": "object",
+            "properties": {
+                "nodes": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "id": {"type": "string"},
+                            "label": {"type": "string"},
+                            "file_type": {"type": "string"},
+                            "source_file": {"type": "string"},
+                        },
+                        "required": ["id", "label", "file_type", "source_file"],
+                    },
+                },
+                "edges": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "source": {"type": "string"},
+                            "target": {"type": "string"},
+                            "relation": {"type": "string"},
+                            "confidence": {
+                                "type": "string",
+                                "enum": ["EXTRACTED", "INFERRED", "AMBIGUOUS"],
+                            },
+                            "source_file": {"type": "string"},
+                        },
+                        "required": [
+                            "source", "target", "relation", "confidence", "source_file",
+                        ],
+                    },
+                },
+                "hyperedges": {"type": "array", "items": {"type": "object"}},
+            },
+            "required": ["nodes", "edges", "hyperedges"],
+        },
+    },
+}
+
 
 def _extraction_system(*, deep: bool = False) -> str:
     """Return the semantic-extraction system prompt, optionally in deep mode."""
@@ -579,7 +629,9 @@ def _neutralise_injection_sentinels(text: str) -> str:
     return _INJECTION_SENTINELS.sub(lambda m: m.group(0)[0] + "​" + m.group(0)[1:], text)
 
 
-def _wrap_untrusted(rel: str, content: str) -> str:
+def _wrap_untrusted(
+    rel: str, content: str, *, line_start: int | None = None, line_end: int | None = None,
+) -> str:
     """Wrap one file's content in a labelled, hash-stamped untrusted-data block.
 
     The model's system prompt instructs it to treat everything inside
@@ -588,8 +640,9 @@ def _wrap_untrusted(rel: str, content: str) -> str:
     """
     sha = hashlib.sha256(content.encode("utf-8", errors="replace")).hexdigest()
     safe = _neutralise_injection_sentinels(content)
+    lines = f' lines="{line_start}-{line_end}"' if line_start is not None else ""
     return (
-        f'<untrusted_source path="{rel}" sha256="{sha}">\n'
+        f'<untrusted_source path="{rel}"{lines} sha256="{sha}">\n'
         f"{safe}\n"
         f"</untrusted_source>"
     )
@@ -624,13 +677,21 @@ def _read_files(units: "list[Path | FileSlice]", root: Path) -> str:
         try:
             if isinstance(u, FileSlice):
                 content = read_slice_text(u)
+                full_text = unit_source_text(u.path)
+                line_start = full_text.count("\n", 0, u.start) + 1
+                line_end = full_text.count("\n", 0, u.end) + (not content.endswith("\n"))
             else:
                 content = _file_to_text(safe_path)
         except OSError:
             continue
         # Whole files are still capped (covers non-splittable large files like
         # code); slices are already bounded to the cap, so the cap is a no-op.
-        parts.append(_wrap_untrusted(rel, content[:_FILE_CHAR_CAP]))
+        if isinstance(u, FileSlice):
+            parts.append(_wrap_untrusted(
+                rel, content[:_FILE_CHAR_CAP], line_start=line_start, line_end=line_end,
+            ))
+        else:
+            parts.append(_wrap_untrusted(rel, content[:_FILE_CHAR_CAP]))
     return "\n\n".join(parts)
 
 
@@ -1261,6 +1322,29 @@ def _response_is_hollow(raw_content: str | None, parsed: dict) -> bool:
     return not nodes and not edges and not hyperedges
 
 
+def _ollama_fragment_has_required_fields(fragment: dict) -> bool:
+    """Reject JSON objects that cannot be safely merged into a source graph."""
+    required = {
+        "nodes": ("id", "label", "file_type", "source_file"),
+        # The merge stage can recover an edge's source_file from its endpoints.
+        # Rejecting that omission would discard otherwise valid relationships.
+        "edges": ("source", "target", "relation", "confidence"),
+    }
+    for kind in ("nodes", "edges", "hyperedges"):
+        entries = fragment.get(kind)
+        if not isinstance(entries, list):
+            return False
+        if any(not isinstance(entry, dict) for entry in entries):
+            return False
+        fields = required.get(kind, ())
+        if any(
+            not all(isinstance(entry.get(field), str) and entry[field].strip() for field in fields)
+            for entry in entries
+        ):
+            return False
+    return True
+
+
 # Backoff between same-chunk retries of a hollow response (#2880). Two entries
 # ⇒ at most three calls per chunk, versus the 15 the bisection path could spend.
 _HOLLOW_BACKOFF_S = (2.0, 8.0)
@@ -1401,6 +1485,8 @@ def _call_openai_compat(
         kwargs["temperature"] = temperature
     if reasoning_effort is not None:
         kwargs["reasoning_effort"] = reasoning_effort
+    if backend == "ollama":
+        kwargs["response_format"] = _OLLAMA_EXTRACTION_RESPONSE_FORMAT
     # A custom provider in providers.json can pass its own extra_body (e.g.
     # `chat_template_kwargs.enable_thinking=false` for self-hosted Qwen3 served
     # by vLLM). When supplied, it wins over the moonshot default — the user has
@@ -1465,6 +1551,9 @@ def _call_openai_compat(
         raise ValueError("LLM returned empty or filtered response")
     raw_content = resp.choices[0].message.content
     result = _parse_llm_json(raw_content or "{}")
+    if backend == "ollama" and not _ollama_fragment_has_required_fields(result):
+        print("[graphify] ollama returned JSON without required graph fields; retrying chunk.", file=sys.stderr)
+        result = {"nodes": [], "edges": [], "hyperedges": []}
     result["input_tokens"] = resp.usage.prompt_tokens if resp.usage else 0
     result["output_tokens"] = resp.usage.completion_tokens if resp.usage else 0
     result["model"] = model
@@ -2568,6 +2657,8 @@ def extract_corpus_parallel(
           the budget and grouped by parent directory. This avoids the worst
           case where 20 randomly-grouped files exceed a model's context
           window in a single request.
+          Splittable documents that exceed the budget on their own are divided
+          at heading/paragraph boundaries while retaining the parent source.
         - If `token_budget=None`, falls back to the legacy fixed-count
           `chunk_size` packing for backwards compatibility.
 
@@ -2615,10 +2706,17 @@ def extract_corpus_parallel(
     if max_retry_depth is None:
         max_retry_depth = _resolve_max_retry_depth()
     files = [f if isinstance(f, (Path, FileSlice)) else Path(f) for f in files]
-    # Split oversized splittable documents into slices that cover the whole file
-    # before packing, so content past _FILE_CHAR_CAP is extracted instead of
-    # silently dropped (#1369). Files at/under the cap pass through unchanged.
-    files = expand_oversized_files(files, _FILE_CHAR_CAP)
+    # The token budget also bounds a *single* document. Previously it only
+    # limited packing multiple files, so a 5k-character Markdown file remained
+    # one unsplittable request even with a much smaller budget. The existing
+    # heading/paragraph slicer preserves every character and the parent path.
+    document_char_cap = _FILE_CHAR_CAP
+    if token_budget is not None and token_budget > 0:
+        document_char_cap = min(
+            _FILE_CHAR_CAP,
+            max(1, token_budget * _CHARS_PER_TOKEN - _PER_FILE_OVERHEAD_CHARS),
+        )
+    files = expand_oversized_files(files, document_char_cap)
     if token_budget is not None:
         chunks = _pack_chunks_by_tokens(files, token_budget=token_budget)
     else:

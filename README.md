@@ -648,6 +648,11 @@ The model's JSON response hit its output-token limit and was cut off mid-string.
 GRAPHIFY_MAX_OUTPUT_TOKENS=16384 graphify extract . --mode deep   # lift the cap
 graphify extract . --mode deep --token-budget 4000                # smaller input chunks -> smaller output
 ```
+The token budget also splits a single Markdown, text, or PDF document at
+heading/paragraph boundaries when needed. Every slice retains the original
+source path and carries its line range in the extraction prompt. Ollama
+extraction requests a JSON schema and retries responses missing required graph
+fields instead of silently accepting them.
 With a cloud gateway like OpenRouter, prefer `--backend openai` (set `OPENAI_BASE_URL`) over the Ollama shim — it's a cleaner OpenAI-compatible path. If the model has its own max-output ceiling, lowering `--token-budget` is the reliable lever.
 
 **Graph HTML is too large to open in a browser (>5000 nodes)**

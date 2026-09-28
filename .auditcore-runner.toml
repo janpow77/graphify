@@ -1,0 +1,21 @@
+[pruefprofile.pr]
+werkzeuge = ["ruff", "pytest"]
+ausloeser = ["lokal", "pr"]
+autofix = false
+
+[pruefprofile.pr.werkzeug.ruff]
+befehl = ["uv", "run", "--all-extras", "--frozen", "ruff", "check", ".", "--output-format=json", "--exit-zero"]
+
+[pruefprofile.pr.werkzeug.pytest]
+befehl = ["uv", "run", "--all-extras", "--frozen", "pytest", "tests/", "-q", "--junitxml={ausgabe}"]
+
+[pruefprofile.semantic]
+werkzeuge = ["ruff", "pytest"]
+ausloeser = ["lokal"]
+autofix = false
+
+[pruefprofile.semantic.werkzeug.ruff]
+befehl = ["uv", "run", "--frozen", "ruff", "check", "graphify/llm.py", "tests/test_chunking.py", "tests/test_llm_backends.py", "--output-format=json", "--exit-zero"]
+
+[pruefprofile.semantic.werkzeug.pytest]
+befehl = ["uv", "run", "--frozen", "--extra", "ollama", "pytest", "tests/test_chunking.py", "tests/test_llm_backends.py", "tests/test_llm_parser.py", "tests/test_llm_parser_reasoning.py", "tests/test_oversized_document_slicing.py", "tests/test_pdf_slicing.py", "tests/test_file_slice.py", "tests/test_hollow_chunks_arm_shrink_guard.py", "-q", "--junitxml={ausgabe}"]
