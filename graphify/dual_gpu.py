@@ -28,9 +28,32 @@ from urllib.parse import urlsplit
 
 
 _SEMANTIC_EXCLUDES = (
-    "*.pdf", "*.png", "*.svg", "*.jpg", "*.jpeg", "*.webp", "*.gif",
-    "*.bmp", "*.tif", "*.tiff", "*.ico", "*.html", "*.htm", "*.yaml",
-    "*.yml", "*.docx", "*.pptx",
+    "*.pdf",
+    "*.png",
+    "*.svg",
+    "*.jpg",
+    "*.jpeg",
+    "*.webp",
+    "*.gif",
+    "*.bmp",
+    "*.tif",
+    "*.tiff",
+    "*.ico",
+    "*.html",
+    "*.htm",
+    "*.yaml",
+    "*.yml",
+    "*.mdx",
+    "*.qmd",
+    "*.skill",
+    "*.rst",
+    "*.docx",
+    "*.pptx",
+    "*.xlsx",
+    "*.gdoc",
+    "*.gsheet",
+    "*.gslides",
+    "graphify-out/**",
 )
 
 

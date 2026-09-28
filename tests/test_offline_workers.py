@@ -65,6 +65,28 @@ def test_import_is_idempotent_and_merge_is_complete(tmp_path):
     assert result["input_tokens"] == 4
 
 
+def test_plan_ignores_office_files_and_generated_markdown(tmp_path, monkeypatch):
+    """Office conversion must not widen a code-and-text manifest."""
+    import graphify.detect as detector
+
+    root = tmp_path / "repo"
+    root.mkdir()
+    (root / "notes.md").write_text("# Real source\n", encoding="utf-8")
+    (root / "template.docx").write_bytes(b"office placeholder")
+    generated = root / "graphify-out" / "converted" / "template.md"
+    generated.parent.mkdir(parents=True)
+    generated.write_text("# Generated source\n", encoding="utf-8")
+    monkeypatch.setattr(
+        detector,
+        "convert_office_file",
+        lambda *args, **kwargs: pytest.fail("Office conversion must be excluded"),
+    )
+
+    manifest = create(root, tmp_path / "job.json", ["notes.md"], ["model"], "a" * 64)
+
+    assert [entry["path"] for entry in manifest["files"]] == ["notes.md"]
+
+
 def test_changed_source_blocks_merge(tmp_path):
     """A changed source file cannot be merged with its old result."""
     root, manifest_path, _, incoming = _fixture(tmp_path)

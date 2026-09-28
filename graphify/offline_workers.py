@@ -120,6 +120,7 @@ def create(
 ) -> dict:
     """Create a verified manifest for semantically extracted source files."""
     from graphify.detect import detect
+    from graphify.dual_gpu import _SEMANTIC_EXCLUDES
     from graphify.llm import _extraction_system
 
     if output.exists():
@@ -131,7 +132,9 @@ def create(
     names = sorted(set(files))
     if any(Path(name).suffix.lower() not in {".md", ".txt"} for name in names):
         raise ValueError("only .md and .txt semantic files are supported")
-    detection = detect(root)
+    detection = detect(
+        root, cache_root=output.parent.resolve(), extra_excludes=list(_SEMANTIC_EXCLUDES)
+    )
     if detection.get("walk_errors"):
         raise ValueError("repository scan was incomplete")
     available = {
@@ -402,6 +405,7 @@ def finalize(manifest_path: Path, root: Path, collected: Path, output: Path) -> 
     """Seed Graphify's semantic cache and build AST/final graph without LLM calls."""
     from graphify.cache import check_semantic_cache, save_semantic_cache
     from graphify.detect import detect
+    from graphify.dual_gpu import _SEMANTIC_EXCLUDES
     from graphify.llm import _extraction_system
 
     manifest = _read_manifest(manifest_path)
@@ -412,7 +416,7 @@ def finalize(manifest_path: Path, root: Path, collected: Path, output: Path) -> 
     prompt = _extraction_system()
     if hashlib.sha256(prompt.encode()).hexdigest() != manifest["prompt_sha256"]:
         raise ValueError("finalizer prompt differs from manifest")
-    detection = detect(root, cache_root=output)
+    detection = detect(root, cache_root=output, extra_excludes=list(_SEMANTIC_EXCLUDES))
     if detection.get("walk_errors"):
         raise ValueError("repository scan was incomplete")
     files_by_type = detection.get("files", {})
@@ -424,7 +428,7 @@ def finalize(manifest_path: Path, root: Path, collected: Path, output: Path) -> 
     excluded = sorted(
         "/" + name for name in all_semantic if Path(name).suffix.lower() not in {".md", ".txt"}
     )
-    scoped = detect(root, cache_root=output, extra_excludes=excluded)
+    scoped = detect(root, cache_root=output, extra_excludes=[*_SEMANTIC_EXCLUDES, *excluded])
     if scoped.get("walk_errors"):
         raise ValueError("scoped repository scan was incomplete")
     detected = {
@@ -481,7 +485,7 @@ def finalize(manifest_path: Path, root: Path, collected: Path, output: Path) -> 
         str(output),
         "--no-cluster",
     ]
-    for pattern in excluded:
+    for pattern in (*_SEMANTIC_EXCLUDES, *excluded):
         command.extend(("--exclude", pattern))
     return subprocess.run(command, env=environment, check=False).returncode  # noqa: S603
 
