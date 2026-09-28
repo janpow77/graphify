@@ -258,6 +258,10 @@ def run_shard(
     BACKENDS["ollama"]["default_model"] = model
     root = root.resolve()
     complete = 0
+    progress_path = directory / manifest["run_id"] / f"shard-{shard}.progress.json"
+    failures_path = directory / manifest["run_id"] / f"shard-{shard}.failures.json"
+    failures: list[str] = []
+    _atomic_json(failures_path, {"run_id": manifest["run_id"], "shard": shard, "paths": failures})
     for entry in manifest["files"]:
         if entry["shard"] != shard:
             continue
@@ -274,33 +278,84 @@ def run_shard(
         else:
             complete += 1
             continue
-        result = extract_corpus_parallel(
-            [path],
-            backend="ollama",
-            model=model,
-            root=root,
-            token_budget=token_budget,
-            max_concurrency=1,
-            cache_root=directory / manifest["run_id"],
-        )
-        if result.get("failed_chunks") or _partial_source_files(result):
-            raise RuntimeError(f"incomplete extraction: {entry['path']}")
-        _safe_file(root, entry["path"], entry["sha256"])
-        scope_semantic_result(result, root=root, allowed_source_files=[path])
-        fragment = {key: result.get(key, []) for key in ("nodes", "edges", "hyperedges")}
-        fragment.update({key: result.get(key, 0) for key in ("input_tokens", "output_tokens")})
-        for bucket in ("nodes", "edges", "hyperedges"):
-            for item in fragment[bucket]:
-                source = item.get("source_file")
-                if source not in (None, "", entry["path"], str(path)):
-                    raise ValueError(f"unexpected source_file in {entry['path']}")
-                item["source_file"] = entry["path"]
+
+        attempt = 0
+
+        def on_chunk_done(index: int, total: int, result: dict) -> None:
+            _atomic_json(
+                progress_path,
+                {
+                    "run_id": manifest["run_id"],
+                    "shard": shard,
+                    "current_file": entry["path"],
+                    "chunks_done": index + 1,
+                    "chunks_total": total,
+                    "failed_chunks": result.get("failed_chunks", 0),
+                    "attempt": attempt,
+                },
+            )
+
         from graphify.semantic_cleanup import validate_semantic_fragment
 
-        if validate_semantic_fragment(fragment) or not (
-            fragment["nodes"] or fragment["hyperedges"]
-        ):
-            raise ValueError(f"invalid or empty result: {entry['path']}")
+        for attempt in range(3):
+            _atomic_json(
+                progress_path,
+                {
+                    "run_id": manifest["run_id"],
+                    "shard": shard,
+                    "current_file": entry["path"],
+                    "chunks_done": 0,
+                    "attempt": attempt,
+                },
+            )
+            cache_root = directory / manifest["run_id"]
+            if attempt:
+                cache_root = (
+                    cache_root
+                    / "retry"
+                    / hashlib.sha256(entry["path"].encode()).hexdigest()
+                    / str(attempt)
+                )
+            result = extract_corpus_parallel(
+                [path],
+                backend="ollama",
+                model=model,
+                root=root,
+                token_budget=token_budget,
+                max_concurrency=1,
+                cache_root=cache_root,
+                on_chunk_done=on_chunk_done,
+            )
+            _safe_file(root, entry["path"], entry["sha256"])
+            if result.get("failed_chunks") or _partial_source_files(result):
+                print(
+                    f"[graphify] retrying incomplete extraction: {entry['path']}", file=sys.stderr
+                )
+                continue
+            scope_semantic_result(result, root=root, allowed_source_files=[path])
+            fragment = {key: result.get(key, []) for key in ("nodes", "edges", "hyperedges")}
+            fragment.update({key: result.get(key, 0) for key in ("input_tokens", "output_tokens")})
+            for bucket in ("nodes", "edges", "hyperedges"):
+                for item in fragment[bucket]:
+                    source = item.get("source_file")
+                    if source not in (None, "", entry["path"], str(path)):
+                        raise ValueError(f"unexpected source_file in {entry['path']}")
+                    item["source_file"] = entry["path"]
+            if not validate_semantic_fragment(fragment) and (
+                fragment["nodes"] or fragment["hyperedges"]
+            ):
+                break
+            print(f"[graphify] retrying invalid or empty result: {entry['path']}", file=sys.stderr)
+        else:
+            failures.append(entry["path"])
+            _atomic_json(
+                failures_path,
+                {"run_id": manifest["run_id"], "shard": shard, "paths": failures},
+            )
+            print(
+                f"[graphify] postponed after 3 invalid attempts: {entry['path']}", file=sys.stderr
+            )
+            continue
         fragment_path, receipt_path = _artifact_paths(directory, manifest["run_id"], entry["path"])
         _check_targets([target])
         _atomic_json(fragment_path, fragment)
@@ -315,7 +370,11 @@ def run_shard(
             "fragment_sha256": _digest(fragment_path),
         }
         _atomic_json(receipt_path, receipt)
+        progress_path.unlink(missing_ok=True)
         complete += 1
+    if failures:
+        raise RuntimeError(f"{len(failures)} semantic file(s) still incomplete: {failures[:3]}")
+    failures_path.unlink(missing_ok=True)
     return complete
 
 

@@ -181,6 +181,64 @@ def test_worker_scopes_model_inventions_and_checks_gpu_twice(tmp_path, monkeypat
     assert [node["id"] for node in fragment["nodes"]] == ["real"]
 
 
+def test_worker_retries_empty_result_with_fresh_cache(tmp_path, monkeypatch):
+    """Ein leeres Modellresultat darf den Shard nicht sofort abbrechen."""
+    root, manifest_path, manifest, _ = _fixture(tmp_path)
+    import graphify.dual_gpu as dual_gpu
+    import graphify.llm as llm
+    import graphify.offline_workers as workers
+
+    monkeypatch.setattr(dual_gpu, "_check_targets", lambda targets: None)
+    monkeypatch.setattr(workers, "_check_weights", lambda *args: None)
+    cache_roots = []
+
+    def extract(files, **kwargs):
+        cache_roots.append(kwargs["cache_root"])
+        kwargs["on_chunk_done"](0, 1, {"failed_chunks": 0})
+        return {
+            "nodes": [] if len(cache_roots) == 1 else [{"id": "real", "source_file": "a.md"}],
+            "edges": [],
+            "hyperedges": [],
+            "failed_chunks": 0,
+        }
+
+    monkeypatch.setattr(llm, "extract_corpus_parallel", extract)
+    directory = tmp_path / "worker"
+    assert run_shard(manifest_path, root, directory, 0, "http://127.0.0.1:11436/v1", 1200) == 1
+    assert len(cache_roots) == 2 and cache_roots[0] != cache_roots[1]
+    assert not (directory / manifest["run_id"] / "shard-0.progress.json").exists()
+
+
+def test_worker_continues_after_invalid_file_without_certifying_shard(tmp_path, monkeypatch):
+    """Ein defektes Dokument blockiert weitere Dateien nicht und bleibt als Fehler sichtbar."""
+    root, manifest_path, manifest, _ = _fixture(tmp_path)
+    import graphify.dual_gpu as dual_gpu
+    import graphify.llm as llm
+    import graphify.offline_workers as workers
+
+    manifest["files"][1]["shard"] = 0
+    manifest_path.write_text(json.dumps(manifest))
+    monkeypatch.setattr(dual_gpu, "_check_targets", lambda targets: None)
+    monkeypatch.setattr(workers, "_check_weights", lambda *args: None)
+
+    def extract(files, **kwargs):
+        name = files[0].name
+        return {
+            "nodes": [] if name == "a.md" else [{"id": "b", "source_file": "b.md"}],
+            "edges": [],
+            "hyperedges": [],
+            "failed_chunks": 0,
+        }
+
+    monkeypatch.setattr(llm, "extract_corpus_parallel", extract)
+    directory = tmp_path / "worker"
+    with pytest.raises(RuntimeError, match="still incomplete"):
+        run_shard(manifest_path, root, directory, 0, "http://127.0.0.1:11436/v1", 1200)
+    assert _artifact_paths(directory, manifest["run_id"], "b.md")[1].is_file()
+    failures = json.loads((directory / manifest["run_id"] / "shard-0.failures.json").read_text())
+    assert failures["paths"] == ["a.md"]
+
+
 def test_finalize_uses_cache_for_offline_graph_build(tmp_path):
     """Final graph construction consumes the verified semantic cache."""
     root, manifest_path, _, incoming = _fixture(tmp_path)
