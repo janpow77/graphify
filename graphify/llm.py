@@ -319,6 +319,12 @@ def _resolve_max_tokens(default: int) -> int:
     return default
 
 
+def _reasoning_effort(backend: str, cfg: dict) -> str | None:
+    if backend == "ollama":
+        return os.environ.get("GRAPHIFY_OLLAMA_REASONING_EFFORT") or cfg.get("reasoning_effort")
+    return cfg.get("reasoning_effort")
+
+
 # Model-name fragments for OpenAI-compatible "reasoning" models that reject an
 # explicit temperature: the API returns 400 "Unsupported value: 'temperature'
 # does not support 0 with this model. Only the default (1) value is supported."
@@ -2113,7 +2119,7 @@ def extract_files_direct(
             mdl,
             user_msg,
             temperature=_resolve_temperature(cfg.get("temperature", 0), mdl),
-            reasoning_effort=cfg.get("reasoning_effort"),
+            reasoning_effort=_reasoning_effort(backend, cfg),
             # Honour max_completion_tokens (gemini) or the older max_tokens key
             # (ollama/deepseek/kimi/openai) -- most openai-compat configs define the
             # latter, so reading only max_completion_tokens silently capped their
@@ -3141,8 +3147,9 @@ def _call_llm(
     temperature = _resolve_temperature(cfg.get("temperature", 0), mdl)
     if temperature is not None:
         kwargs["temperature"] = temperature
-    if cfg.get("reasoning_effort"):
-        kwargs["reasoning_effort"] = cfg["reasoning_effort"]
+    reasoning_effort = _reasoning_effort(backend, cfg)
+    if reasoning_effort:
+        kwargs["reasoning_effort"] = reasoning_effort
     # Custom providers can override via providers.json `extra_body`; falls back
     # to the moonshot default to preserve existing behavior.
     if cfg.get("extra_body") is not None:

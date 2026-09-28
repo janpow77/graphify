@@ -151,6 +151,19 @@ def test_gemini_model_can_be_overridden_by_env(tmp_path, monkeypatch):
     assert call.call_args.args[2] == "gemini-3.1-pro-preview"
 
 
+def test_ollama_reasoning_effort_can_be_disabled_for_extraction(tmp_path, monkeypatch):
+    monkeypatch.setenv("OLLAMA_API_KEY", "ollama")
+    monkeypatch.setenv("GRAPHIFY_OLLAMA_REASONING_EFFORT", "none")
+    source = tmp_path / "note.md"
+    source.write_text("# Architecture\n")
+    result = {"nodes": [], "edges": [], "hyperedges": [], "input_tokens": 1, "output_tokens": 1}
+
+    with patch("graphify.llm._call_openai_compat", return_value=result) as call:
+        llm.extract_files_direct([source], backend="ollama", root=tmp_path)
+
+    assert call.call_args.kwargs["reasoning_effort"] == "none"
+
+
 def test_missing_gemini_key_names_both_supported_env_vars(monkeypatch):
     _clear_backend_env(monkeypatch)
 
