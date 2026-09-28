@@ -10,6 +10,7 @@ import pytest
 
 from graphify.offline_workers import (
     _artifact_paths,
+    _assign_by_estimated_chunks,
     _atomic_json,
     _digest,
     create,
@@ -38,9 +39,7 @@ def _fixture(tmp_path):
             "output_tokens": 1,
         }
         _atomic_json(fragment_path, fragment)
-        _atomic_json(
-            receipt_path,
-            {
+        receipt = {
                 "run_id": manifest["run_id"],
                 "source_path": entry["path"],
                 "source_sha256": entry["sha256"],
@@ -49,8 +48,19 @@ def _fixture(tmp_path):
                 "weights_sha256": manifest["weights_sha256"],
                 "prompt_sha256": manifest["prompt_sha256"],
                 "fragment_sha256": _digest(fragment_path),
-            },
+            }
+        receipt.update(
+            {
+                key: value
+                for key, value in {
+                    "token_budget": manifest.get("token_budget"),
+                    "allocation": manifest.get("allocation"),
+                    "estimated_chunks": entry.get("estimated_chunks"),
+                }.items()
+                if value is not None
+            }
         )
+        _atomic_json(receipt_path, receipt)
     return root, manifest_path, manifest, incoming
 
 
@@ -292,3 +302,23 @@ def test_single_shard_plan(tmp_path):
     )
     assert manifest["shards"] == 1
     assert {entry["shard"] for entry in manifest["files"]} == {0}
+
+
+def test_chunk_assignment_balances_large_files_first_deterministically():
+    """Estimated chunk work, not file count, determines the shard assignment."""
+    entries = [
+        {"path": "a.md", "estimated_chunks": 12},
+        {"path": "b.md", "estimated_chunks": 8},
+        {"path": "c.md", "estimated_chunks": 4},
+        {"path": "d.md", "estimated_chunks": 2},
+    ]
+
+    assigned = _assign_by_estimated_chunks(entries, 2)
+
+    loads = [
+        sum(entry["estimated_chunks"] for entry in assigned if entry["shard"] == shard)
+        for shard in range(2)
+    ]
+    assert loads == [14, 12]
+    assert [entry["path"] for entry in assigned] == ["a.md", "b.md", "c.md", "d.md"]
+    assert _assign_by_estimated_chunks(entries, 2) == assigned

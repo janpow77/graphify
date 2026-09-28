@@ -103,6 +103,16 @@ def _read_manifest(path: Path) -> dict:
         raise ValueError("model weights digest missing")
     if not _SHA.fullmatch(str(data.get("prompt_sha256", ""))):
         raise ValueError("prompt digest missing")
+    token_budget = data.get("token_budget", 1200)
+    if type(token_budget) is not int or token_budget < 1:
+        raise ValueError("invalid token budget")
+    allocation = data.get("allocation")
+    if allocation is not None and allocation != "estimated-chunks-greedy-v1":
+        raise ValueError("unknown shard allocation strategy")
+    for entry in files:
+        estimate = entry.get("estimated_chunks")
+        if estimate is not None and (type(estimate) is not int or estimate < 1):
+            raise ValueError(f"invalid chunk estimate for {entry['path']}")
     return data
 
 
@@ -115,8 +125,38 @@ def _safe_file(root: Path, name: str, digest: str) -> Path:
     return path
 
 
+def _estimated_chunks(path: Path, token_budget: int) -> int:
+    """Estimate worker cost using the extractor's own chunking rules."""
+    from graphify.llm import _pack_chunks_by_tokens, expand_oversized_files
+
+    cap = min(20_000, max(1, token_budget * 4 - 160))
+    chunks = _pack_chunks_by_tokens(expand_oversized_files([path], cap), token_budget)
+    return max(1, len(chunks))
+
+
+def _assign_by_estimated_chunks(entries: list[dict], shard_count: int) -> list[dict]:
+    """Greedily balance largest files first while preserving deterministic ties."""
+    loads = [0] * shard_count
+    assigned: list[dict | None] = [None] * len(entries)
+    order = sorted(
+        range(len(entries)),
+        key=lambda index: (-entries[index]["estimated_chunks"], entries[index]["path"]),
+    )
+    for index in order:
+        shard = min(range(shard_count), key=lambda candidate: (loads[candidate], candidate))
+        entry = {**entries[index], "shard": shard}
+        assigned[index] = entry
+        loads[shard] += entry["estimated_chunks"]
+    return [entry for entry in assigned if entry is not None]
+
+
 def create(
-    root: Path, output: Path, files: list[str], models: list[str], weights_sha256: str
+    root: Path,
+    output: Path,
+    files: list[str],
+    models: list[str],
+    weights_sha256: str,
+    token_budget: int = 1200,
 ) -> dict:
     """Create a verified manifest for semantically extracted source files."""
     from graphify.detect import detect
@@ -126,7 +166,13 @@ def create(
     if output.exists():
         raise ValueError(f"manifest already exists: {output}")
     shards = len(models)
-    if shards < 1 or not files or not _SHA.fullmatch(weights_sha256):
+    if (
+        shards < 1
+        or not files
+        or not _SHA.fullmatch(weights_sha256)
+        or type(token_budget) is not int
+        or token_budget < 1
+    ):
         raise ValueError("provide files, models, and a SHA-256 weight digest")
     root = root.resolve()
     names = sorted(set(files))
@@ -151,7 +197,14 @@ def create(
         path = root / relative
         if not path.is_file() or path.is_symlink() or not path.resolve().is_relative_to(root):
             raise ValueError(f"source missing or unsafe: {name}")
-        entries.append({"path": name, "sha256": _digest(path), "shard": index % shards})
+        entries.append(
+            {
+                "path": name,
+                "sha256": _digest(path),
+                "estimated_chunks": _estimated_chunks(path, token_budget),
+            }
+        )
+    entries = _assign_by_estimated_chunks(entries, shards)
     prompt = _extraction_system()
     manifest = {
         "schema": 1,
@@ -160,6 +213,8 @@ def create(
         "weights_sha256": weights_sha256,
         "prompt_sha256": hashlib.sha256(prompt.encode()).hexdigest(),
         "shards": shards,
+        "token_budget": token_budget,
+        "allocation": "estimated-chunks-greedy-v1",
         "files": entries,
     }
     _atomic_json(output, manifest, overwrite=False)
@@ -194,6 +249,11 @@ def _check_receipt(manifest: dict, entry: dict, directory: Path) -> dict:
         "prompt_sha256": manifest["prompt_sha256"],
         "fragment_sha256": _digest(fragment_path),
     }
+    for key in ("token_budget", "allocation"):
+        if key in manifest:
+            expected[key] = manifest[key]
+    if "estimated_chunks" in entry:
+        expected["estimated_chunks"] = entry["estimated_chunks"]
     if receipt != expected:
         raise ValueError(f"result identity/hash mismatch: {entry['path']}")
     fragment, errors = load_validated_semantic_fragment(fragment_path)
@@ -224,7 +284,12 @@ def _check_weights(endpoint: str, model: str, expected: str) -> None:
 
 
 def run_shard(
-    manifest_path: Path, root: Path, directory: Path, shard: int, endpoint: str, token_budget: int
+    manifest_path: Path,
+    root: Path,
+    directory: Path,
+    shard: int,
+    endpoint: str,
+    token_budget: int | None = None,
 ) -> int:
     """Extract one shard while checking model and source identities."""
     from graphify.dual_gpu import Target, _check_targets
@@ -237,6 +302,7 @@ def run_shard(
     from graphify.cache import scope_semantic_result
 
     manifest = _read_manifest(manifest_path)
+    token_budget = token_budget or manifest.get("token_budget", 1200)
     if not 0 <= shard < manifest["shards"] or token_budget < 1:
         raise ValueError("invalid shard or token budget")
     if hashlib.sha256(_extraction_system().encode()).hexdigest() != manifest["prompt_sha256"]:
@@ -369,6 +435,11 @@ def run_shard(
             "prompt_sha256": manifest["prompt_sha256"],
             "fragment_sha256": _digest(fragment_path),
         }
+        for key in ("token_budget", "allocation"):
+            if key in manifest:
+                receipt[key] = manifest[key]
+        if "estimated_chunks" in entry:
+            receipt["estimated_chunks"] = entry["estimated_chunks"]
         _atomic_json(receipt_path, receipt)
         progress_path.unlink(missing_ok=True)
         complete += 1
@@ -559,13 +630,14 @@ def main(argv: list[str] | None = None) -> int:
     plan.add_argument("files", nargs="+")
     plan.add_argument("--model", required=True, action="append")
     plan.add_argument("--weights-sha256", required=True)
+    plan.add_argument("--token-budget", type=int, default=1200)
     worker = commands.add_parser("run-shard")
     worker.add_argument("manifest", type=Path)
     worker.add_argument("root", type=Path)
     worker.add_argument("results", type=Path)
     worker.add_argument("--shard", type=int, required=True)
     worker.add_argument("--endpoint", required=True)
-    worker.add_argument("--token-budget", type=int, default=1200)
+    worker.add_argument("--token-budget", type=int)
     join = commands.add_parser("merge")
     join.add_argument("manifest", type=Path)
     join.add_argument("root", type=Path)
@@ -583,7 +655,14 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     try:
         if args.command == "plan":
-            result = create(args.root, args.manifest, args.files, args.model, args.weights_sha256)
+            result = create(
+                args.root,
+                args.manifest,
+                args.files,
+                args.model,
+                args.weights_sha256,
+                args.token_budget,
+            )
             print(result["run_id"])
         elif args.command == "run-shard":
             print(
