@@ -1,0 +1,10 @@
+[pruefprofile.pr]
+werkzeuge = ["ruff", "pytest"]
+ausloeser = ["lokal", "pr"]
+autofix = false
+
+[pruefprofile.pr.werkzeug.ruff]
+befehl = ["uv", "run", "--frozen", "ruff", "check", ".", "--output-format=json", "--exit-zero"]
+
+[pruefprofile.pr.werkzeug.pytest]
+befehl = ["uv", "run", "--frozen", "pytest", "tests/", "-q", "--junitxml={ausgabe}"]

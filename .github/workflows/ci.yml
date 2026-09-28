@@ -71,7 +71,12 @@ jobs:
         run: uv sync --all-extras --frozen
 
       - name: Run tests
+        if: matrix.python-version != '3.12'
         run: uv run --frozen pytest tests/ -q --tb=short
+
+      - name: Code mit Auditcore-Runner prüfen
+        if: matrix.python-version == '3.12'
+        run: uvx --from 'git+https://github.com/janpow77/auditcore.git@b987d8f9c74cb15b2a95ad62d42954f0295fec60#subdirectory=packages/auditcore_runner' auditcore-runner lokal pr --host --ohne-cache
 
       - name: Verify install works end-to-end
         run: |
