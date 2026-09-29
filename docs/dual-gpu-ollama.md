@@ -12,16 +12,25 @@ semantische Dateitypen übrig bleiben.
 Auf `janpow-ai` gibt es dafür den Befehl:
 
 ```bash
-graphify-dual-gpu auditcore --no-cluster
-graphify-dual-gpu --all --no-cluster
+graphify-dual-gpu auditcore
+graphify-dual-gpu --all
 ```
 
 `--all` verarbeitet die acht Repositories unter `~/Projekte`, beginnend mit
 Auditcore. Die Ergebnisse liegen getrennt von den Repositories unter
-`~/graphify-dual-out/<repo>/graphify-out/graph.json`. Ohne `--no-cluster`
-erstellt Graphify außerdem Cluster und den Bericht. Ein späterer Aufruf mit
-demselben Ausgabeverzeichnis nutzt Graphifys Cache; `--force` erzwingt einen
-vollständigen Neuaufbau.
+`~/graphify-dual-out/<repo>/graphify-out/graph.json`. Standardmäßig erstellt
+Graphify beim initialen Lauf außerdem die Cluster und den Bericht
+`GRAPH_REPORT.md`.
+
+Weitere Optionen:
+* `--no-cluster`: überspringt Cluster- und Berichterstellung für einen reinen Graphen.
+* `--code-only`: aktualisiert ausschließlich den Code-AST in Sekunden (ohne GPU/LLM) und behält die semantische Schicht bei.
+* `--report-only`: generiert Cluster und `GRAPH_REPORT.md` nachträglich aus einem vorhandenen `graph.json` neu.
+* `--force`: erzwingt einen vollständigen Neuaufbau unter Umgehung des inkrementellen Caches.
+
+Das Standard-Token-Budget pro Chunk beträgt 3.000 Tokens (anpassbar über
+`--token-budget` oder `GRAPHIFY_TOKEN_BUDGET`). Ein späterer Aufruf mit
+demselben Ausgabeverzeichnis nutzt Graphifys inkrementellen Cache.
 
 GPU 0 verwendet `qwen38-27b-gpu0-16k:latest` mit 16.384 Kontext-Tokens.
 GPU 1 verwendet `smtek/Qwen3.8-27B:Q3_K_M` mit 24.576 Kontext-Tokens. Beide

@@ -159,3 +159,54 @@ def test_verify_run_detects_tampered_graph_and_journal(tmp_path: Path) -> None:
     graph.write_text('{"nodes": []}')
     journal.write_text(journal.read_text() + "corrupted\n")
     assert "request journal hash mismatch" in verify_run(output)
+
+
+def test_code_only_flag_runs_extract_directly(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The --code-only flag invokes graphify extract without needing GPU targets."""
+    from graphify.dual_gpu import run
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "mod.py").write_text("x = 1\n")
+    output = tmp_path / "out"
+    invoked: list[list[str]] = []
+
+    def mock_run(cmd: list[str], *args: object, **kwargs: object) -> object:
+        invoked.append(cmd)
+        class Res:
+            returncode = 0
+        return Res()
+
+    import subprocess
+    monkeypatch.setattr(subprocess, "run", mock_run)
+    code = run([str(source), "--out", str(output), "--code-only"])
+    assert code == 0
+    assert len(invoked) == 1
+    assert "--code-only" in invoked[0]
+    assert "-m" in invoked[0]
+    assert "extract" in invoked[0]
+
+
+def test_report_only_flag_runs_cluster_only(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The --report-only flag invokes cluster-only for an existing graph."""
+    from graphify.dual_gpu import run
+    source = tmp_path / "source"
+    source.mkdir()
+    output = tmp_path / "out"
+    graph_path = output / "graphify-out" / "graph.json"
+    graph_path.parent.mkdir(parents=True)
+    graph_path.write_text('{"nodes": []}')
+    invoked: list[list[str]] = []
+
+    def mock_run(cmd: list[str], *args: object, **kwargs: object) -> object:
+        invoked.append(cmd)
+        class Res:
+            returncode = 0
+        return Res()
+
+    import subprocess
+    monkeypatch.setattr(subprocess, "run", mock_run)
+    code = run([str(source), "--out", str(output), "--report-only"])
+    assert code == 0
+    assert len(invoked) == 1
+    assert "cluster-only" in invoked[0]
+    assert str(graph_path) in invoked[0]

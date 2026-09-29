@@ -395,26 +395,67 @@ def run(argv: list[str] | None = None) -> int:
     parser.add_argument("path", type=Path, help="repository to scan")
     parser.add_argument("--out", required=True, type=Path, help="separate output directory")
     parser.add_argument(
-        "--target", required=True, action="append", type=_target, help="URL|MODEL; pass twice"
+        "--target", action="append", type=_target, help="URL|MODEL; pass twice"
     )
-    parser.add_argument("--token-budget", type=int, default=1200)
+    parser.add_argument("--token-budget", type=int, default=3000)
     parser.add_argument("--max-output-tokens", type=int, default=4096)
     parser.add_argument("--api-timeout", type=float, default=600)
     parser.add_argument("--no-cluster", action="store_true")
     parser.add_argument("--force", action="store_true")
+    parser.add_argument(
+        "--code-only", action="store_true", help="extract code AST only without GPU/LLM"
+    )
+    parser.add_argument(
+        "--report-only",
+        action="store_true",
+        help="regenerate report and clustering from existing graph",
+    )
     args = parser.parse_args(argv)
-    if len(args.target) != 2:
+    source = args.path.resolve()
+    output = args.out.resolve()
+    if output == source or source in output.parents:
+        parser.error("--out must be outside the scanned repository")
+    if args.report_only:
+        graph_path = output / "graphify-out" / "graph.json"
+        if not graph_path.is_file():
+            parser.error(f"no existing graph.json found at {graph_path}")
+        command = [
+            sys.executable,
+            "-m",
+            "graphify",
+            "cluster-only",
+            str(output),
+            "--graph",
+            str(graph_path),
+        ]
+        return subprocess.run(command).returncode
+    if not source.is_dir():
+        parser.error(f"repository does not exist: {source}")
+    if args.code_only:
+        command = [
+            sys.executable,
+            "-m",
+            "graphify",
+            "extract",
+            str(source),
+            "--code-only",
+            "--out",
+            str(output),
+            "--timing",
+        ]
+        if args.no_cluster:
+            command.append("--no-cluster")
+        if args.force:
+            command.append("--force")
+        for pattern in _SEMANTIC_EXCLUDES:
+            command.extend(("--exclude", pattern))
+        return subprocess.run(command).returncode
+    if not args.target or len(args.target) != 2:
         parser.error("exactly two --target arguments are required")
     if args.target[0].base_url == args.target[1].base_url:
         parser.error("the two Ollama targets must be different")
     if args.token_budget <= 0 or args.max_output_tokens <= 0 or args.api_timeout <= 0:
         parser.error("budgets and timeout must be positive")
-    source = args.path.resolve()
-    output = args.out.resolve()
-    if not source.is_dir():
-        parser.error(f"repository does not exist: {source}")
-    if output == source or source in output.parents:
-        parser.error("--out must be outside the scanned repository")
     _check_semantic_scope(source)
     run_id = uuid.uuid4().hex
     source_sha256, source_files = _source_snapshot(source)
@@ -599,6 +640,20 @@ def run(argv: list[str] | None = None) -> int:
                     f"[dual-gpu] model could not stay loaded at {target.base_url}: {exc}",
                     file=sys.stderr,
                 )
+        if not args.no_cluster and graph_path.is_file():
+            report_command = [
+                sys.executable,
+                "-m",
+                "graphify",
+                "cluster-only",
+                str(output),
+                "--graph",
+                str(graph_path),
+            ]
+            print(f"[dual-gpu] generating cluster report for {output}", flush=True)
+            report_proc = subprocess.run(report_command, check=False)
+            if report_proc.returncode != 0:
+                print("[dual-gpu] warning: cluster-only report generation failed", file=sys.stderr)
     return status
 
 

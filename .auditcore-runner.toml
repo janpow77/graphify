@@ -1,13 +1,16 @@
 [pruefprofile.pr]
-werkzeuge = ["ruff", "pytest"]
+werkzeuge = ["doku", "ruff", "pytest"]
 ausloeser = ["lokal", "pr"]
 autofix = false
 
+[pruefprofile.pr.werkzeug.doku]
+befehl = ["python3", "/home/janpow/Projekte/auditcore/scripts/docs/repository_doku_check.py", "."]
+
 [pruefprofile.pr.werkzeug.ruff]
-befehl = ["uv", "run", "--all-extras", "--frozen", "ruff", "check", ".", "--output-format=json", "--exit-zero"]
+befehl = ["uv", "run", "--frozen", "ruff", "check", ".", "--output-format=json", "--exit-zero"]
 
 [pruefprofile.pr.werkzeug.pytest]
-befehl = ["uv", "run", "--all-extras", "--frozen", "pytest", "tests/", "-q", "--junitxml={ausgabe}"]
+befehl = ["uv", "run", "--frozen", "pytest", "tests/", "-q", "--junitxml={ausgabe}"]
 
 [pruefprofile.semantic]
 werkzeuge = ["ruff", "pytest"]
