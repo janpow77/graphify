@@ -74,9 +74,17 @@ jobs:
         if: matrix.python-version != '3.12'
         run: uv run --frozen pytest tests/ -q --tb=short
 
+      - name: Dokumentationsprüfung bereitstellen
+        if: matrix.python-version == '3.12'
+        run: |
+          cd "$RUNNER_TEMP"
+          curl --fail --silent --show-error --location --retry 3 -o repository_doku_check.py https://raw.githubusercontent.com/janpow77/auditcore/30807f4d0281340d88fa4c3ebf491e8017a72b31/scripts/docs/repository_doku_check.py
+          echo 'f08cf7488add79a8f11c58ff0efd00bc7ad7b4f8b7048e0fa8941aa80204fc74  repository_doku_check.py' | sha256sum --check
+          echo "AUDITCORE_DOKU_CHECK=$RUNNER_TEMP/repository_doku_check.py" >> "$GITHUB_ENV"
+
       - name: Code mit Auditcore-Runner prüfen
         if: matrix.python-version == '3.12'
-        run: uvx --from 'git+https://github.com/janpow77/auditcore.git@b987d8f9c74cb15b2a95ad62d42954f0295fec60#subdirectory=packages/auditcore_runner' auditcore-runner lokal pr --host --ohne-cache
+        run: uvx --from 'git+https://github.com/janpow77/auditcore.git@30807f4d0281340d88fa4c3ebf491e8017a72b31#subdirectory=packages/auditcore_runner' auditcore-runner lokal pr --host --ohne-cache
 
       - name: Verify install works end-to-end
         run: |

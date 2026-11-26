@@ -4,7 +4,7 @@ ausloeser = ["lokal", "pr"]
 autofix = false
 
 [pruefprofile.pr.werkzeug.doku]
-befehl = ["python3", "/home/janpow/Projekte/auditcore/scripts/docs/repository_doku_check.py", "."]
+befehl = ["sh", "-c", "exec python3 \"${AUDITCORE_DOKU_CHECK:-$HOME/Projekte/auditcore/scripts/docs/repository_doku_check.py}\" ."]
 
 [pruefprofile.pr.werkzeug.ruff]
 befehl = ["uv", "run", "--frozen", "ruff", "check", ".", "--output-format=json", "--exit-zero"]
@@ -22,3 +22,11 @@ befehl = ["uv", "run", "--frozen", "ruff", "check", "graphify/llm.py", "tests/te
 
 [pruefprofile.semantic.werkzeug.pytest]
 befehl = ["uv", "run", "--frozen", "--extra", "ollama", "pytest", "tests/test_chunking.py", "tests/test_llm_backends.py", "tests/test_llm_parser.py", "tests/test_llm_parser_reasoning.py", "tests/test_oversized_document_slicing.py", "tests/test_pdf_slicing.py", "tests/test_file_slice.py", "tests/test_hollow_chunks_arm_shrink_guard.py", "-q", "--junitxml={ausgabe}"]
+
+[pruefprofile.repository]
+werkzeuge = ["gitleaks"]
+ausloeser = ["lokal"]
+autofix = false
+
+[pruefprofile.repository.werkzeug.gitleaks]
+befehl = ["gitleaks", "dir", ".", "--no-banner", "--redact", "--report-format", "json", "--report-path", "{ausgabe}", "--exit-code", "0"]
