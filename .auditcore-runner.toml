@@ -4,7 +4,7 @@ ausloeser = ["lokal", "pr"]
 autofix = false
 
 [pruefprofile.pr.werkzeug.doku]
-befehl = ["python3", "/home/janpow/Projekte/auditcore/scripts/docs/repository_doku_check.py", "."]
+befehl = ["sh", "-c", "exec python3 \"${AUDITCORE_DOKU_CHECK:-$HOME/Projekte/auditcore/scripts/docs/repository_doku_check.py}\" ."]
 
 [pruefprofile.pr.werkzeug.ruff]
 befehl = ["uv", "run", "--frozen", "ruff", "check", ".", "--output-format=json", "--exit-zero"]
